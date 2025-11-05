@@ -278,6 +278,7 @@ class iDP3Workspace(BaseWorkspace):
                     # therefore at this point the file might have been empty!
                     topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
 
+                    print(f"topk_ckpt_path: {topk_ckpt_path}")
                     if topk_ckpt_path is not None:
                         self.save_checkpoint(path=topk_ckpt_path)
                     cprint("checkpoint saved.", "green")

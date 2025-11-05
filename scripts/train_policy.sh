@@ -3,11 +3,11 @@
 #   bash scripts/train_policy.sh idp3 gr1_dex-3d 0913_example
 #   bash scripts/train_policy.sh dp_224x224_r3m gr1_dex-image 0913_example
 
-dataset_path=/home/ze/projects/Improved-3D-Diffusion-Policy/training_data_example
+dataset_path=/home/user_jzs/Improved-3D-Diffusion-Policy/training_data_arx
 
 
 DEBUG=False
-wandb_mode=offline
+wandb_mode=online
 
 
 alg_name=${1}
