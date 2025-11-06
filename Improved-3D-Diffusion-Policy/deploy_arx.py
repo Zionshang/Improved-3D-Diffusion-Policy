@@ -9,7 +9,7 @@ import time
 from omegaconf import OmegaConf
 import pathlib
 from diffusion_policy_3d.workspace.base_workspace import BaseWorkspace
-import tqdm
+# import tqdm
 import torch
 import os
 
@@ -20,16 +20,15 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 from diffusion_policy_3d.common.multi_realsense import MultiRealSense
 
-# import arx5 python interface
-ARX_PY_DIR = pathlib.Path(__file__).parents[1].joinpath("arx5-sdk", "python")
-sys.path.append(str(ARX_PY_DIR))
-import arx5_interface as arx5
-
 import numpy as np
 import torch
 from termcolor import cprint
 from collections import deque
 
+# import arx5 python interface
+ARX_PY_DIR = pathlib.Path(__file__).parents[1].joinpath("arx5-sdk", "python")
+sys.path.append(str(ARX_PY_DIR))
+import arx5_interface as arx5
 
 class ArxX5EnvInference:
     """
@@ -81,12 +80,13 @@ class ArxX5EnvInference:
         for action_id in range(self.action_horizon):
             act = np.asarray(action_list[action_id]).reshape(-1)
             self.action_buf.append(act)
+            print(f"Action ID: {action_id}, Act: {act}")
 
             # 从action中构造关节命令
             js_cmd = arx5.JointState(self.robot_config.joint_dof)
             js_cmd.pos()[:] = act[: self.robot_config.joint_dof]
             js_cmd.gripper_pos = float(act[self.robot_config.joint_dof])
-            js_cmd.timestamp = self.controller.get_timestamp() + action_id * 0.1  # todo: 有待确认
+            js_cmd.timestamp = self.controller.get_timestamp() + (action_id + 1) * 0.15
             self.controller.set_joint_cmd(js_cmd)
 
             # 读取当前状态以构造observations
@@ -129,7 +129,12 @@ class ArxX5EnvInference:
         # 复位到 home
         if first_init:
             self.controller.reset_to_home()
-            time.sleep(1.0)
+            time.sleep(2.0)
+            js_current = self.controller.get_joint_state()
+            js_current.gripper_pos = self.robot_config.gripper_width
+            js_current.timestamp = self.controller.get_timestamp() + 1.0
+            self.controller.set_joint_cmd(js_current)
+            time.sleep(2.0)
         print("ARX5 ready!")
 
         # 初始化一次相机
@@ -179,7 +184,7 @@ def main(cfg: OmegaConf):
     # fetch policy model
     policy = workspace.get_model()
     action_horizon = policy.horizon - policy.n_obs_steps + 1
-    roll_out_length = 300
+    roll_out_length = 500
 
     img_size = 224
     num_points = 4096
@@ -207,12 +212,17 @@ def main(cfg: OmegaConf):
 
     while step_count < roll_out_length:
         with torch.no_grad():
+            t_start = time.time()
             action = policy(obs_dict)[0]
+            t_end = time.time()
+            print(f"inference time: {(t_end - t_start) * 1000.0:.2f} ms")
             action_list = [act.numpy() for act in action]
 
         obs_dict = env.step(action_list)
         step_count += action_horizon
         print(f"step: {step_count}")
+    
+    env.controller.reset_to_home()
 
 
 if __name__ == "__main__":

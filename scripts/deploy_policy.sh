@@ -1,35 +1,37 @@
 #!/usr/bin/env bash
 
-# Minimal deploy script for running inference.
-# Usage examples:
-#   bash scripts/deploy_policy.sh idp3 gr1_dex-3d 0913_example
-#   bash scripts/deploy_policy.sh dp_224x224_r3m gr1_dex-image 0913_example
-# Notes:
-#   - This script only passes parameters required for deployment.
-#   - deploy.py will load model from: ${hydra.run.dir}/checkpoints/latest.ckpt
-#     Make sure hydra.run.dir points to the training run output directory.
+set -e
 
-alg_name=${1}
-task_name=${2}
-config_name=${alg_name}
-addition_info=${3}
+# Usage: bash scripts/deploy_policy.sh <alg_name> <task_name> [addition_info]
+alg_name=${1:-}
+task_name=${2:-}
+addition_info=${3:-run}
 
-# Build run_dir following the training output pattern.
-# If your training run uses a different path, set this variable directly.
+if [[ -z "$alg_name" || -z "$task_name" ]]; then
+    echo "Usage: $0 <alg_name> <task_name> [addition_info]"
+    exit 1
+fi
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+IDP_DIR="$ROOT/Improved-3D-Diffusion-Policy"
+SDK_DIR="$ROOT/arx5-sdk"
+
+# Minimal env for ARX5 SDK
+ARCH=$(uname -m); [[ "$ARCH" == "x86_64" ]] && LIB_ARCH=x86_64 || LIB_ARCH=aarch64
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$SDK_DIR/python"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$SDK_DIR/lib/$LIB_ARCH"
+
+# If AMENT_PREFIX_PATH is empty, fall back to CONDA_PREFIX (common with ament on conda)
+: "${AMENT_PREFIX_PATH:=${CONDA_PREFIX:-}}"; [[ -n "$AMENT_PREFIX_PATH" ]] && export AMENT_PREFIX_PATH
+
 run_dir="data/outputs/${task_name}-${alg_name}-${addition_info}_seed0"
-
-# Optional: select GPU visibility (deploy.py currently uses CPU for env tensors)
-gpu_id=0
-echo -e "\033[33mGPU to expose (optional): ${gpu_id}\033[0m"
-
-cd Improved-3D-Diffusion-Policy
-
 export HYDRA_FULL_ERROR=1
-export CUDA_VISIBLE_DEVICES=${gpu_id}
+export CUDA_VISIBLE_DEVICES="${GPU_ID:-0}"
 
-python deploy_arx.py --config-name=${config_name}.yaml \
-    task=${task_name} \
-    hydra.run.dir=${run_dir}
+cd "$IDP_DIR"
+python deploy_arx.py --config-name="${alg_name}.yaml" \
+    task="${task_name}" \
+    hydra.run.dir="${run_dir}"
 
 
 
