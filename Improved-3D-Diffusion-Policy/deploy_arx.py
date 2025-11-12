@@ -9,6 +9,7 @@ import time
 from omegaconf import OmegaConf
 import pathlib
 from diffusion_policy_3d.workspace.base_workspace import BaseWorkspace
+
 # import tqdm
 import torch
 import os
@@ -29,6 +30,8 @@ from collections import deque
 ARX_PY_DIR = pathlib.Path(__file__).parents[1].joinpath("arx5-sdk", "python")
 sys.path.append(str(ARX_PY_DIR))
 import arx5_interface as arx5
+from open3d_viz import AsyncPointCloudViewer
+
 
 class ArxX5EnvInference:
     """
@@ -48,17 +51,21 @@ class ArxX5EnvInference:
         num_points=4096,
         model="X5",
         interface="can0",
+        visualize_point_cloud=True,
     ):
 
         # obs/action
         self.use_point_cloud = use_point_cloud
         self.use_image = use_image
+        self.visualize_point_cloud = visualize_point_cloud and use_point_cloud
 
         # camera
         self.camera = MultiRealSense(
             use_front_cam=True,  # 默认单相机，也支持多相机
             front_num_points=num_points,
             img_size=img_size,
+            front_z_far=1.0,
+            front_z_near=0.2,
         )
 
         # horizon
@@ -70,23 +77,31 @@ class ArxX5EnvInference:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device("cpu")
+        print(f"Using device: {self.device}")
 
         # ARX5 控制器
         self.robot_config = arx5.RobotConfigFactory.get_instance().get_config(model)
         self.controller = arx5.Arx5JointController(model, interface)
+
+        # 点云可视化（独立进程，非阻塞）
+        self._pcd_viewer = (
+            AsyncPointCloudViewer(window_name="ARX5 Live Point Cloud", point_size=5)
+            if self.visualize_point_cloud
+            else None
+        )
 
     def step(self, action_list):
 
         for action_id in range(self.action_horizon):
             act = np.asarray(action_list[action_id]).reshape(-1)
             self.action_buf.append(act)
-            print(f"Action ID: {action_id}, Act: {act}")
+            # print(f"Action ID: {action_id}, Act: {act}")
 
             # 从action中构造关节命令
             js_cmd = arx5.JointState(self.robot_config.joint_dof)
             js_cmd.pos()[:] = act[: self.robot_config.joint_dof]
             js_cmd.gripper_pos = float(act[self.robot_config.joint_dof])
-            js_cmd.timestamp = self.controller.get_timestamp() + (action_id + 1) * 0.15
+            js_cmd.timestamp = self.controller.get_timestamp() + (action_id + 1) * 0.08
             self.controller.set_joint_cmd(js_cmd)
 
             # 读取当前状态以构造observations
@@ -100,6 +115,8 @@ class ArxX5EnvInference:
             cam_dict = self.camera()
             if self.use_point_cloud:
                 self.cloud_buf.append(cam_dict["point_cloud"])
+                if self._pcd_viewer is not None:
+                    self._pcd_viewer.update(cam_dict["point_cloud"])
             if self.use_image:
                 self.color_buf.append(cam_dict.get("color"))
                 self.depth_buf.append(cam_dict.get("depth"))
@@ -141,6 +158,8 @@ class ArxX5EnvInference:
         cam_dict = self.camera()
         if self.use_point_cloud:
             self.cloud_buf.append(cam_dict["point_cloud"])
+            if self._pcd_viewer is not None:
+                self._pcd_viewer.update(cam_dict["point_cloud"])
         if self.use_image:
             self.color_buf.append(cam_dict.get("color"))
             self.depth_buf.append(cam_dict.get("depth"))
@@ -184,7 +203,7 @@ def main(cfg: OmegaConf):
     # fetch policy model
     policy = workspace.get_model()
     action_horizon = policy.horizon - policy.n_obs_steps + 1
-    roll_out_length = 500
+    roll_out_length = 400
 
     img_size = 224
     num_points = 4096
@@ -204,6 +223,7 @@ def main(cfg: OmegaConf):
         num_points=num_points,
         model=arx_model,
         interface=arx_interface,
+        visualize_point_cloud=True,
     )
 
     obs_dict = env.reset(first_init=first_init)
@@ -221,8 +241,12 @@ def main(cfg: OmegaConf):
         obs_dict = env.step(action_list)
         step_count += action_horizon
         print(f"step: {step_count}")
-    
+
     env.controller.reset_to_home()
+    # 关闭可视化进程
+    _viewer = getattr(env, "_pcd_viewer", None)
+    if _viewer is not None:
+        _viewer.close()
 
 
 if __name__ == "__main__":

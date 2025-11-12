@@ -57,8 +57,9 @@ def init_given_realsense(
         depth_sensor.set_option(rs.option.inter_cam_sync_mode, sync_mode)
         
         # set min distance
-        depth_sensor.set_option(rs.option.min_distance, 0.05)
-        
+        # depth_sensor.set_option(rs.option.min_distance, 0.05)
+        depth_sensor.set_option(rs.option.visual_preset, rs.l500_visual_preset.short_range)
+
         # get depth scale
         depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
         align = rs.align(rs.stream.color)

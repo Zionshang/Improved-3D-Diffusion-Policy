@@ -3,6 +3,7 @@
 set -e
 
 # Usage: bash scripts/deploy_policy.sh <alg_name> <task_name> [addition_info]
+# Example: bash scripts/deploy_policy.sh idp3 x5-3d kettle
 alg_name=${1:-}
 task_name=${2:-}
 addition_info=${3:-run}
