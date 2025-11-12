@@ -20,7 +20,7 @@ dataset:
   pad_before: ${eval:'${n_obs_steps}-1'}
   pad_after: ${eval:'${n_action_steps}-1'}
   seed: 42 # 用于划分训练/验证、以及子采样时的随机种子，保证可复现
-  val_ratio: 0.00 # 验证集比例，0 表示不留验证集（全部用于训练）
+  val_ratio: 0.2 # 验证集比例，0 表示不留验证集（全部用于训练）
   max_train_episodes: 90 # 最多从数据集中加载多少条 episode 来参与训练。
 
   num_points: ${policy.pointcloud_encoder_cfg.num_points} # 每帧点云保留的点数

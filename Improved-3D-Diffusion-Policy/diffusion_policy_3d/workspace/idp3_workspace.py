@@ -237,9 +237,10 @@ class iDP3Workspace(BaseWorkspace):
                 # run validation
                 if (self.epoch % cfg.training.val_every) == 0:
                     with torch.no_grad():                        
-                        train_losses = list()
+                        val_losses = list()
                         
-                        for batch_idx, batch in enumerate(train_dataloader):
+                        # use validation dataloader for unbiased evaluation
+                        for batch_idx, batch in enumerate(val_dataloader):
                             batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True) if isinstance(x, torch.Tensor) else x)
                             obs_dict = batch['obs']
                             gt_action = batch['action']
@@ -247,16 +248,15 @@ class iDP3Workspace(BaseWorkspace):
                             result = policy.predict_action(obs_dict)
                             pred_action = result['action_pred']
                             mse = torch.nn.functional.mse_loss(pred_action, gt_action)
-                            train_losses.append(mse.item())
+                            val_losses.append(mse.item())
                             
-                            if (cfg.training.max_train_steps is not None) \
-                                and batch_idx >= (cfg.training.max_train_steps-1):
+                            if (cfg.training.max_val_steps is not None) \
+                                and batch_idx >= (cfg.training.max_val_steps-1):
                                 break
-                        train_loss = np.sum(train_losses)
+                        val_loss = np.mean(val_losses)
                         # log epoch average validation loss
-                        step_log['train_action_mse_error'] = train_loss
-                        step_log['test_mean_score'] = - step_log['train_action_mse_error']
-                        cprint(f"val loss: {train_loss:.7f}", "cyan")
+                        step_log['val_action_mse_error'] = val_loss
+                        cprint(f"val loss: {val_loss:.7f}", "cyan")
 
 
                 # checkpoint
@@ -328,4 +328,5 @@ def main(cfg):
     workspace.run()
 
 if __name__ == "__main__":
-    main()
+    # Hydra 会通过装饰器自动注入 cfg，因此直接调用无需参数；静态分析可能误报缺少参数。
+    main()  # type: ignore[call-arg]

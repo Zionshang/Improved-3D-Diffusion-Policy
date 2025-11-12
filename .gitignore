@@ -15,5 +15,6 @@ ablation_data/
 
 training_data_example/
 training_data_arx/
+training_data_**
 
 wandb/

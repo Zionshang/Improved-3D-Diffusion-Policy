@@ -36,7 +36,7 @@ iDP3 is a general 3D visuomotor policy for any robot. You could use iDP3 without
 Install conda env and packages for both learning and deployment machines:
 
     conda remove -n idp3 --all
-    conda create -n idp3 python=3.8
+    conda create -n idp3 python=3.10
     conda activate idp3
     
     # for cuda >= 12.1
@@ -44,51 +44,25 @@ Install conda env and packages for both learning and deployment machines:
     # else, 
     # just install the torch version that matches your cuda version
     
-    
+    ###### install 3d diffusion policy
+    # for both trainning and depoly
+    pip install hydra-core==1.2.0 dill==0.3.5.1 wandb tqdm einops==0.4.1 diffusers==0.11.1 huggingface_hub==0.25.2 zarr==2.12.0 pandas termcolor
+    # only for trainning
+    pip install numba==0.56.4
 
-    # install my visualizer
-    cd third_party
-    cd visualizer && pip install -e . && cd ..
-    pip install kaleido plotly open3d tyro termcolor h5py
-    cd ..
-
-
-    # install 3d diffusion policy
-    # for trainning
-    # pip install wandb ipdb gpustat visdom notebook mediapy torch_geometric natsort scikit-video easydict pandas moviepy imageio imageio-ffmpeg termcolor av dm_control dill==0.3.5.1 hydra-core==1.2.0 einops==0.4.1 diffusers==0.11.1 zarr==2.12.0 numba==0.56.4 pygame==2.1.2 shapely==1.8.4 tensorboard==2.10.1 tensorboardx==2.5.1 absl-py==0.13.0 pyparsing==2.4.7 jupyterlab==3.0.14 scikit-image yapf==0.31.0 opencv-python==4.5.3.56 psutil av matplotlib setuptools==59.5.0
-
-    pip install 
-    hydra-core==1.2.0
-    dill==0.3.5.1
-    wandb
-    tqdm
-    einops==0.4.1
-    diffusers==0.11.1
-    huggingface_hub==0.25.2
-    zarr==2.12.0
-    pandas
-    numba==0.56.4
-
-    # for depoly
+    # only for depoly
     # first, install realsense driver
     # check this version for RealSenseL515: https://github.com/IntelRealSense/librealsense/releases/tag/v2.54.2
-
-    hydra-core==1.2.0
-    dill==0.3.5.1
-    opencv-python
-    imageio
-    pyrealsense2==2.54.2.5684
-    termcolor
-    wandb
-    tqdm
-    einops==0.4.1
-    diffusers==0.11.1
-    huggingface_hub==0.25.2
-    zarr==2.12.0
-    pandas
+    pip install opencv-python imageio pyrealsense2==2.54.2.5684 tqdm
 
     cd Improved-3D-Diffusion-Policy
     pip install -e .
+    cd ..
+
+    ###### install my visualizer
+    cd third_party
+    cd visualizer && pip install -e . && cd ..
+    pip install kaleido plotly open3d tyro termcolor h5py
     cd ..
 
     # install for diffusion policy if you want to use image-based policy
