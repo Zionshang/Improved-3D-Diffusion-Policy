@@ -48,12 +48,12 @@ Install conda env and packages for both learning and deployment machines:
     # for both trainning and depoly
     pip install hydra-core==1.2.0 dill==0.3.5.1 wandb tqdm einops==0.4.1 diffusers==0.11.1 huggingface_hub==0.25.2 zarr==2.12.0 pandas termcolor
     # only for trainning
-    pip install numba==0.56.4
+    pip install numba
 
     # only for depoly
     # first, install realsense driver
     # check this version for RealSenseL515: https://github.com/IntelRealSense/librealsense/releases/tag/v2.54.2
-    pip install opencv-python imageio pyrealsense2==2.54.2.5684 tqdm
+    pip install opencv-python==4.9.0.80 imageio pyrealsense2==2.54.2.5684 tqdm open3d
 
     cd Improved-3D-Diffusion-Policy
     pip install -e .

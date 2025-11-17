@@ -61,11 +61,7 @@ class ArxX5EnvInference:
 
         # camera
         self.camera = MultiRealSense(
-            use_front_cam=True,  # 默认单相机，也支持多相机
-            front_num_points=num_points,
-            img_size=img_size,
-            front_z_far=1.0,
-            front_z_near=0.2,
+            use_right_cam=False, front_num_points=4096, use_grid_sampling=True, img_size=1024, front_z_far=1.0, front_z_near=0.2
         )
 
         # horizon
@@ -84,11 +80,7 @@ class ArxX5EnvInference:
         self.controller = arx5.Arx5JointController(model, interface)
 
         # 点云可视化（独立进程，非阻塞）
-        self._pcd_viewer = (
-            AsyncPointCloudViewer(window_name="ARX5 Live Point Cloud", point_size=5)
-            if self.visualize_point_cloud
-            else None
-        )
+        self._pcd_viewer = AsyncPointCloudViewer(window_name="ARX5 Live Point Cloud", point_size=5) if self.visualize_point_cloud else None
 
     def step(self, action_list):
 
@@ -203,7 +195,7 @@ def main(cfg: OmegaConf):
     # fetch policy model
     policy = workspace.get_model()
     action_horizon = policy.horizon - policy.n_obs_steps + 1
-    roll_out_length = 400
+    roll_out_length = 300
 
     img_size = 224
     num_points = 4096
