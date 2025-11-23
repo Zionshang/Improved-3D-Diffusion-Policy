@@ -79,19 +79,16 @@ Install conda env and packages for both learning and deployment machines:
     # first, install realsense driver
     # check this version for RealSenseL515: https://github.com/IntelRealSense/librealsense/releases/tag/v2.54.2
     # compile the source of driver
-    # install dependency
-    sudo apt-get install libssl-dev libusb-1.0-0-dev libudev-dev pkg-config libgtk-3-dev
-    sudo apt-get install git wget cmake build-essential
-    sudo apt-get install libglfw3-dev libgl1-mesa-dev libglu1-mesa-dev at
-    # install config
-    sudo cp config/99-realsense-libusb.rules /etc/udev/rules.d/
-    sudo udevadm control --reload-rules && sudo udevadm trigger
-    # build
-    mkdir build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release
-    make clean && make -j8
+    sudo apt-get install libssl-dev libusb-1.0-0-dev libglfw3-dev libglu1-mesa-dev
+    git clone https://github.com/IntelRealSense/librealsense.git 
+    cd librealsense 
+    git checkout v2.54.2
+    sudo ./scripts/setup_udev_rules.sh
+    mkdir build && cd build 
+    cmake .. -DFORCE_RSUSB_BACKEND=TRUE -DCMAKE_BUILD_TYPE=Release # pyrealsense2==2.54.2 doesn't support on jetpack6.0, you can build it form souce by option -DBUILD_PYTHON_BINDINGS:bool=true
+    make -j$(nproc) 
     sudo make install
-    # also install python api
+    # also install python api (not support on jetpack 6.0)
     pip install pyrealsense2==2.54.2.5684
 
 ## Usage
