@@ -27,7 +27,7 @@ from termcolor import cprint
 from collections import deque
 
 # import arx5 python interface
-ARX_PY_DIR = pathlib.Path(__file__).parents[1].joinpath("arx5-sdk", "python")
+ARX_PY_DIR = pathlib.Path(__file__).resolve().parents[1].joinpath("arx5-sdk", "python")
 sys.path.append(str(ARX_PY_DIR))
 import arx5_interface as arx5
 from open3d_viz import AsyncPointCloudViewer
@@ -208,15 +208,23 @@ def main(cfg: OmegaConf):
     env = ArxX5EnvInference(
         obs_horizon=policy.n_obs_steps,
         action_horizon=action_horizon,
-        device="cpu",
+        device="gpu",
         use_point_cloud=use_point_cloud,
         use_image=use_image,
         img_size=img_size,
         num_points=num_points,
         model=arx_model,
         interface=arx_interface,
-        visualize_point_cloud=True,
+        visualize_point_cloud=False,
     )
+
+    if not torch.cuda.is_available():
+        cprint("CUDA is not available! Inference will be slow on CPU.", "red", attrs=["bold"])
+    else:
+        cprint(f"CUDA is available. Using device: {env.device}", "green", attrs=["bold"])
+
+    # Move policy to the inference device
+    policy.to(env.device)
 
     obs_dict = env.reset(first_init=first_init)
 
@@ -228,7 +236,7 @@ def main(cfg: OmegaConf):
             action = policy(obs_dict)[0]
             t_end = time.time()
             print(f"inference time: {(t_end - t_start) * 1000.0:.2f} ms")
-            action_list = [act.numpy() for act in action]
+            action_list = [act.cpu().numpy() for act in action]
 
         obs_dict = env.step(action_list)
         step_count += action_horizon

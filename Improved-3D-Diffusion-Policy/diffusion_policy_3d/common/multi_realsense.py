@@ -292,7 +292,6 @@ class SingleVisionProcess(Process):
                 # 体素下采样
                 if self.use_grid_sampling:
                     point_cloud_frame = grid_sample_pcd(point_cloud_frame, grid_size=0.002)
-                    print("After grid sample point cloud size: ", point_cloud_frame.shape)
                 # 随机均匀采样
                 point_cloud_frame = color_weighted_downsample(point_cloud_frame, self.num_points, target_color=(255, 255, 0), temperature=20.0)
                 np.random.shuffle(point_cloud_frame)
