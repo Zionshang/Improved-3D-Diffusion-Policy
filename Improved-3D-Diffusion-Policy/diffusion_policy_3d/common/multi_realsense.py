@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 import cv2
 import numpy as np
-from collections import deque
 import pyrealsense2 as rs
-from multiprocessing import Process, Pipe, Queue, Event
+from multiprocessing import Process, Queue
 import time
 import multiprocessing
-from diffusion_policy_3d.common.pcd_downsampling import grid_sample_pcd, random_uniform_downsample, color_weighted_downsample
+from diffusion_policy_3d.common.pcd_downsampling import grid_sample_pcd, color_weighted_downsample, random_uniform_downsample
 
 multiprocessing.set_start_method("fork")
 
@@ -80,106 +79,6 @@ def init_given_realsense_L515(
         return pipeline, None, None, None
 
 
-def init_given_realsense_D455(
-    device,
-    enable_rgb=True,
-    enable_depth=False,
-    sync_mode=0,
-):
-    # use `rs-enumerate-devices` to check available resolutions
-    pipeline = rs.pipeline()
-    config = rs.config()
-    config.enable_device(device)
-    print("Initializing camera {}".format(device))
-
-    if enable_depth:
-        #     Depth         1024x768      @ 30Hz     Z16
-        # Depth         640x480       @ 30Hz     Z16
-        # Depth         320x240       @ 30Hz     Z16
-
-        # D455
-        # h, w = 720, 1280
-        h, w = 480, 640
-        config.enable_stream(rs.stream.depth, w, h, rs.format.z16, 30)
-    if enable_rgb:
-
-        # h, w = 720, 1280
-        h, w = 480, 640
-        config.enable_stream(rs.stream.color, w, h, rs.format.rgb8, 30)
-
-    config.resolve(pipeline)
-    profile = pipeline.start(config)
-
-    if enable_depth:
-
-        # Get the depth sensor (or any other sensor you want to configure)
-        device = profile.get_device()
-        depth_sensor = device.query_sensors()[0]
-
-        # get depth scale
-        depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
-        align = rs.align(rs.stream.color)
-
-        depth_profile = profile.get_stream(rs.stream.depth)
-        intrinsics = depth_profile.as_video_stream_profile().get_intrinsics()
-        camera_info = CameraInfo(intrinsics.width, intrinsics.height, intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy)
-
-        print("camera {} init.".format(device))
-        return pipeline, align, depth_scale, camera_info
-    else:
-        print("camera {} init.".format(device))
-        return pipeline, None, None, None
-
-
-def init_given_realsense_D435(
-    device,
-    enable_rgb=True,
-    enable_depth=False,
-    sync_mode=0,
-):
-    # use `rs-enumerate-devices` to check available resolutions
-    pipeline = rs.pipeline()
-    config = rs.config()
-    config.enable_device(device)
-    print("Initializing camera {}".format(device))
-
-    if enable_depth:
-        #     Depth         1024x768      @ 30Hz     Z16
-        # Depth         640x480       @ 30Hz     Z16
-        # Depth         320x240       @ 30Hz     Z16
-
-        # D455
-        h, w = 720, 1280
-        config.enable_stream(rs.stream.depth, w, h, rs.format.z16, 30)
-    if enable_rgb:
-
-        h, w = 720, 1280
-        config.enable_stream(rs.stream.color, w, h, rs.format.rgb8, 30)
-
-    config.resolve(pipeline)
-    profile = pipeline.start(config)
-
-    if enable_depth:
-
-        # Get the depth sensor (or any other sensor you want to configure)
-        device = profile.get_device()
-        depth_sensor = device.query_sensors()[0]
-
-        # get depth scale
-        depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
-        align = rs.align(rs.stream.color)
-
-        depth_profile = profile.get_stream(rs.stream.depth)
-        intrinsics = depth_profile.as_video_stream_profile().get_intrinsics()
-        camera_info = CameraInfo(intrinsics.width, intrinsics.height, intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy)
-
-        print("camera {} init.".format(device))
-        return pipeline, align, depth_scale, camera_info
-    else:
-        print("camera {} init.".format(device))
-        return pipeline, None, None, None
-
-
 class CameraInfo:
     """Camera intrisics for point cloud creation."""
 
@@ -207,6 +106,8 @@ class SingleVisionProcess(Process):
         z_near=0.1,
         use_grid_sampling=True,
         img_size=384,
+        resize_image=True,
+        use_color_sampling=True,
     ) -> None:
         super(SingleVisionProcess, self).__init__()
         self.queue = queue
@@ -219,7 +120,7 @@ class SingleVisionProcess(Process):
 
         self.use_grid_sampling = use_grid_sampling
 
-        self.resize = True
+        self.resize_image = resize_image
         # self.height, self.width = 512, 512
         self.height, self.width = img_size, img_size
 
@@ -227,6 +128,7 @@ class SingleVisionProcess(Process):
         self.z_far = z_far
         self.z_near = z_near
         self.num_points = num_points
+        self.use_color_sampling = use_color_sampling
 
     def get_vision(self):
         frame = self.pipeline.wait_for_frames()
@@ -261,27 +163,16 @@ class SingleVisionProcess(Process):
         return color_frame, depth_frame, point_cloud_frame
 
     def run(self):
-        device_name = "L515"
-        if device_name == "L515":
-            init_given_realsense = init_given_realsense_L515
-        elif device_name == "D435":
-            init_given_realsense = init_given_realsense_D435
-        elif device_name == "D455":
-            init_given_realsense = init_given_realsense_D455
-        else:
-            raise NotImplementedError("Unknown device name {}".format(device_name))
-
-        self.pipeline, self.align, self.depth_scale, self.camera_info = init_given_realsense(
+        self.pipeline, self.align, self.depth_scale, self.camera_info = init_given_realsense_L515(
             self.device, enable_rgb=self.enable_rgb, enable_depth=self.enable_depth, sync_mode=self.sync_mode
         )
 
-        debug = False
         while True:
             # 获取原始图像和点云数据
             color_frame, depth_frame, point_cloud_frame = self.get_vision()
 
             # 图像预处理
-            if self.resize:
+            if self.resize_image:
                 if self.enable_rgb and color_frame is not None:
                     color_frame = cv2.resize(color_frame, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
                 if self.enable_depth and depth_frame is not None:
@@ -328,95 +219,57 @@ class SingleVisionProcess(Process):
         return colored_cloud
 
 
-class MultiRealSense(object):
+class L515Camera:
     def __init__(
         self,
-        use_front_cam=True,
-        use_right_cam=False,
-        front_cam_idx=0,
-        right_cam_idx=1,
-        front_num_points=4096,
-        right_num_points=1024,
-        front_z_far=1.0,
-        front_z_near=0.1,
-        right_z_far=0.5,
-        right_z_near=0.01,
+        device_idx=0,
+        num_points=4096,
+        z_far=1.0,
+        z_near=0.1,
         use_grid_sampling=True,
         img_size=512,
+        enable_rgb=True,
+        enable_depth=True,
+        enable_pointcloud=True,
+        resize_image=True,
+        use_color_sampling=True,
     ):
-
         self.devices = get_realsense_id()
+        self.device = self.devices[device_idx]
 
-        self.front_queue = Queue(maxsize=3)
-        self.right_queue = Queue(maxsize=3)
+        self.queue = Queue(maxsize=3)
+        self.process = SingleVisionProcess(
+            self.device,
+            self.queue,
+            enable_rgb=enable_rgb,
+            enable_depth=enable_depth,
+            enable_pointcloud=enable_pointcloud,
+            sync_mode=0,
+            num_points=num_points,
+            z_far=z_far,
+            z_near=z_near,
+            use_grid_sampling=use_grid_sampling,
+            img_size=img_size,
+            resize_image=resize_image,
+            use_color_sampling=use_color_sampling,
+        )
 
-        # 0: f1380328, 1: f1422212
-
-        # sync_mode: Use 1 for master, 2 for slave, 0 for default (no sync)
-
-        if use_front_cam:
-            self.front_process = SingleVisionProcess(
-                self.devices[front_cam_idx],
-                self.front_queue,
-                enable_rgb=True,
-                enable_depth=True,
-                enable_pointcloud=True,
-                sync_mode=1,
-                num_points=front_num_points,
-                z_far=front_z_far,
-                z_near=front_z_near,
-                use_grid_sampling=use_grid_sampling,
-                img_size=img_size,
-            )
-        if use_right_cam:
-            self.right_process = SingleVisionProcess(
-                self.devices[right_cam_idx],
-                self.right_queue,
-                enable_rgb=True,
-                enable_depth=True,
-                enable_pointcloud=True,
-                sync_mode=1,
-                num_points=right_num_points,
-                z_far=right_z_far,
-                z_near=right_z_near,
-                use_grid_sampling=use_grid_sampling,
-                img_size=img_size,
-            )
-
-        if use_front_cam:
-            self.front_process.start()
-            print("front camera start.")
-
-        if use_right_cam:
-            self.right_process.start()
-            print("right camera start.")
-
-        self.use_front_cam = use_front_cam
-        self.use_right_cam = use_right_cam
+        self.process.start()
+        print("L515 camera process started.")
 
     def __call__(self):
-        cam_dict = {}
-        if self.use_front_cam:
-            front_color, front_depth, front_point_cloud = self.front_queue.get()
-            cam_dict.update({"color": front_color, "depth": front_depth, "point_cloud": front_point_cloud})
-
-        if self.use_right_cam:
-            right_color, right_depth, right_point_cloud = self.right_queue.get()
-            cam_dict.update({"right_color": right_color, "right_depth": right_depth, "right_point_cloud": right_point_cloud})
-        return cam_dict
+        color, depth, point_cloud = self.queue.get()
+        return {"color": color, "depth": depth, "point_cloud": point_cloud}
 
     def finalize(self):
-        if self.use_front_cam:
-            self.front_process.terminate()
-        if self.use_right_cam:
-            self.right_process.terminate()
+        self.process.terminate()
 
     def __del__(self):
         self.finalize()
 
 
 if __name__ == "__main__":
-    cam = MultiRealSense(use_right_cam=False, front_num_points=4096, use_grid_sampling=False, img_size=1024, front_z_far=1.0, front_z_near=0.2)
+    cam = L515Camera(num_points=4096, use_grid_sampling=False, img_size=1024, z_far=1.0, z_near=0.2)
 
     from open3d_viz import AsyncPointCloudViewer
 

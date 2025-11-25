@@ -19,7 +19,7 @@ os.environ["WANDB_SILENT"] = "True"
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 
-from diffusion_policy_3d.common.multi_realsense import MultiRealSense
+from diffusion_policy_3d.common.multi_realsense import L515Camera
 
 import numpy as np
 import torch
@@ -47,8 +47,6 @@ class ArxX5EnvInference:
         device="cpu",
         use_point_cloud=True,
         use_image=False,
-        img_size=224,
-        num_points=4096,
         model="X5",
         interface="can0",
         visualize_point_cloud=True,
@@ -60,8 +58,15 @@ class ArxX5EnvInference:
         self.visualize_point_cloud = visualize_point_cloud and use_point_cloud
 
         # camera
-        self.camera = MultiRealSense(
-            use_right_cam=False, front_num_points=4096, use_grid_sampling=True, img_size=1024, front_z_far=1.0, front_z_near=0.2
+        self.camera = L515Camera(
+            num_points=4096,
+            enable_depth=True,
+            enable_rgb=True,  # 为了使得深度图与rgb对齐，必须开启
+            enable_pointcloud=True,
+            use_grid_sampling=True,
+            use_color_sampling=True,
+            z_far=1.0,
+            z_near=0.2,
         )
 
         # horizon
@@ -197,8 +202,6 @@ def main(cfg: OmegaConf):
     action_horizon = policy.horizon - policy.n_obs_steps + 1
     roll_out_length = 300
 
-    img_size = 224
-    num_points = 4096
     first_init = True
 
     # 读取 ARX model / interface
@@ -211,8 +214,6 @@ def main(cfg: OmegaConf):
         device="gpu",
         use_point_cloud=use_point_cloud,
         use_image=use_image,
-        img_size=img_size,
-        num_points=num_points,
         model=arx_model,
         interface=arx_interface,
         visualize_point_cloud=False,
