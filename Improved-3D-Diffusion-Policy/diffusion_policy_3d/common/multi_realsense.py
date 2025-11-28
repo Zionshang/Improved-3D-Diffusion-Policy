@@ -142,12 +142,8 @@ class SingleVisionProcess(Process):
             depth_frame = aligned_frames.get_depth_frame()
             depth_frame = np.asanyarray(depth_frame.get_data())
 
-            clip_lower = 0.01
-            clip_high = 1.0
             depth_frame = depth_frame.astype(np.float32)
             depth_frame *= self.depth_scale
-            depth_frame[depth_frame < clip_lower] = clip_lower
-            depth_frame[depth_frame > clip_high] = clip_high
 
             if self.enable_pointcloud:
                 # Nx6 raw point cloud
