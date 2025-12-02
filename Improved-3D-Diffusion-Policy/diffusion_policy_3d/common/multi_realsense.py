@@ -97,17 +97,21 @@ class SingleVisionProcess(Process):
         self,
         device,
         queue,
-        enable_rgb=True,
+        enable_rgb=False,
         enable_depth=False,
         enable_pointcloud=False,
         sync_mode=0,
         num_points=2048,
         z_far=1.0,
         z_near=0.1,
-        use_grid_sampling=True,
+        use_grid_sampling=False,
+        grid_size=0.002,
         img_size=384,
-        resize_image=True,
-        use_color_sampling=True,
+        resize_image=False,
+        use_color_sampling=False,
+        target_color=(255, 255, 0),
+        color_temperature=20.0,
+        use_uniform_sampling=False,
     ) -> None:
         super(SingleVisionProcess, self).__init__()
         self.queue = queue
@@ -119,6 +123,7 @@ class SingleVisionProcess(Process):
         self.sync_mode = sync_mode
 
         self.use_grid_sampling = use_grid_sampling
+        self.grid_size = grid_size
 
         self.resize_image = resize_image
         # self.height, self.width = 512, 512
@@ -129,6 +134,9 @@ class SingleVisionProcess(Process):
         self.z_near = z_near
         self.num_points = num_points
         self.use_color_sampling = use_color_sampling
+        self.target_color = target_color
+        self.color_temperature = color_temperature
+        self.use_uniform_sampling = use_uniform_sampling
 
     def get_vision(self):
         frame = self.pipeline.wait_for_frames()
@@ -178,9 +186,14 @@ class SingleVisionProcess(Process):
             if self.enable_pointcloud and point_cloud_frame is not None:
                 # 体素下采样
                 if self.use_grid_sampling:
-                    point_cloud_frame = grid_sample_pcd(point_cloud_frame, grid_size=0.002)
-                # 随机均匀采样
-                point_cloud_frame = color_weighted_downsample(point_cloud_frame, self.num_points, target_color=(255, 255, 0), temperature=20.0)
+                    point_cloud_frame = grid_sample_pcd(point_cloud_frame, grid_size=self.grid_size)
+                if self.use_color_sampling:
+                    # 颜色引导采样
+                    point_cloud_frame = color_weighted_downsample(
+                        point_cloud_frame, self.num_points, target_color=self.target_color, temperature=self.color_temperature
+                    )
+                if self.use_uniform_sampling:
+                    point_cloud_frame = random_uniform_downsample(point_cloud_frame, self.num_points)
                 np.random.shuffle(point_cloud_frame)
 
             self.queue.put([color_frame, depth_frame, point_cloud_frame])
@@ -222,13 +235,17 @@ class L515Camera:
         num_points=4096,
         z_far=1.0,
         z_near=0.1,
-        use_grid_sampling=True,
+        use_grid_sampling=False,
+        grid_size=0.002,
         img_size=512,
-        enable_rgb=True,
-        enable_depth=True,
-        enable_pointcloud=True,
-        resize_image=True,
-        use_color_sampling=True,
+        enable_rgb=False,
+        enable_depth=False,
+        enable_pointcloud=False,
+        resize_image=False,
+        use_color_sampling=False,
+        use_uniform_sampling=False,
+        target_color=(255, 255, 0),
+        color_temperature=20.0,
     ):
         self.devices = get_realsense_id()
         self.device = self.devices[device_idx]
@@ -245,9 +262,13 @@ class L515Camera:
             z_far=z_far,
             z_near=z_near,
             use_grid_sampling=use_grid_sampling,
+            grid_size=grid_size,
             img_size=img_size,
             resize_image=resize_image,
             use_color_sampling=use_color_sampling,
+            use_uniform_sampling=use_uniform_sampling,
+            target_color=target_color,
+            color_temperature=color_temperature,
         )
 
         self.process.start()
@@ -265,14 +286,27 @@ class L515Camera:
 
 
 if __name__ == "__main__":
-    cam = L515Camera(num_points=4096, use_grid_sampling=False, img_size=1024, z_far=1.0, z_near=0.2)
+    cam = L515Camera(
+            num_points=4096,
+            enable_depth=True,
+            enable_rgb=True,  # 为了使得深度图与rgb对齐，必须开启
+            enable_pointcloud=True,
+            # use_uniform_sampling=True,
+            use_grid_sampling=True,
+            grid_size=0.002,
+            use_color_sampling=True,
+            target_color=(100, 100, 0),
+            color_temperature=10.0,
+            z_far=1.2,
+            z_near=0.2,
+        )
 
     from open3d_viz import AsyncPointCloudViewer
 
     viewer = AsyncPointCloudViewer(
         width=960,
         height=720,
-        point_size=2.0,
+        point_size=5.0,
         queue_size=1,
         window_name="RealSense Live Point Cloud",
     )
@@ -283,6 +317,7 @@ if __name__ == "__main__":
             pc = out.get("point_cloud", None)
             if pc is not None and pc.size:
                 viewer.update(pc)
+                print("Point cloud size:", pc.shape)
             else:
                 time.sleep(0.01)
     except KeyboardInterrupt:

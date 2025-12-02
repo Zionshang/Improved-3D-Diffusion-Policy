@@ -66,7 +66,7 @@ class ArxX5EnvInference:
             use_grid_sampling=True,
             grid_size=0.002,
             use_color_sampling=True,
-            target_color=(255, 0, 255),
+            target_color=(100, 100, 0),
             color_temperature=10.0,
             z_far=1.2,
             z_near=0.2,
