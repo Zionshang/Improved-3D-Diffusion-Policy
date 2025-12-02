@@ -90,6 +90,13 @@ class ArxX5EnvInference:
         # 点云可视化（独立进程，非阻塞）
         self._pcd_viewer = AsyncPointCloudViewer(window_name="ARX5 Live Point Cloud", point_size=5) if self.visualize_point_cloud else None
 
+    def set_target_color(self, color):
+        if hasattr(self.camera, 'set_target_color'):
+            self.camera.set_target_color(color)
+            print(f"Target color updated to {color}")
+        else:
+            print("Camera does not support setting target color.")
+
     def step(self, action_list):
 
         for action_id in range(self.action_horizon):

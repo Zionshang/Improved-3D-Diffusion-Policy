@@ -15,6 +15,7 @@ import hydra
 import torch
 from omegaconf import OmegaConf
 from termcolor import cprint
+import math
 
 from deploy_arx import ArxX5EnvInference
 from diffusion_policy_3d.workspace.base_workspace import BaseWorkspace
@@ -30,6 +31,8 @@ class TaskConfig:
     run_dir: pathlib.Path
     step_length: int
     end_pose: List[float]  # [joint1...joint6, gripper]
+    target_color: tuple  # (R, G, B)
+    target_timestep: float
     ckpt_tag: Optional[str] = "latest"  # can be "latest" or filename
 
 
@@ -107,19 +110,49 @@ def run_task(env: TaskEnv, policy: torch.nn.Module, step_len: int, obs_dict: Dic
             action_list = [act.detach().cpu().numpy() for act in action]
         obs_dict = env.step(action_list)
         step_count += len(action_list)
-        print(f"[{name}] step: {step_count}/{step_len}")
+        
+        # 获取并打印 gripper torque
+        current_torque = env.controller.get_joint_state().gripper_torque
+        print(f"[{name}] step: {step_count}/{step_len}, gripper_torque: {current_torque:.4f}")
     return obs_dict
 
 
-def move_to_pose(env: TaskEnv, target: List[float], name: str):
+def move_to_pose(env: TaskEnv, target: List[float], duration: float, name: str):
     if len(target) < env.robot_config.joint_dof + 1:
         raise ValueError(f"{name} 的 end_pose 长度不足，需要 {env.robot_config.joint_dof + 1} 个值")
     js_cmd = env.controller.get_joint_state()
     js_cmd.pos()[:] = target[: env.robot_config.joint_dof]
     js_cmd.gripper_pos = float(target[env.robot_config.joint_dof])
-    js_cmd.timestamp = env.controller.get_timestamp() + 1.0
+    js_cmd.timestamp = env.controller.get_timestamp() + duration
     env.controller.set_joint_cmd(js_cmd)
-    print(f"[{name}] 已发送结束位姿。")
+    print(f"[{name}] 已发送结束位姿。正在等待移动完成...")
+
+    # # 阻塞并打印 torque，直到动作大致完成
+    # start_time = time.time()
+    # while time.time() - start_time < duration:
+    #     current_torque = env.controller.get_joint_state().gripper_torque
+    #     print(f"[{name}] moving... gripper_torque: {current_torque:.4f}")
+    #     time.sleep(0.1)  # 10Hz 打印频率
+
+
+def check_task_success(env: TaskEnv, task_name: str):
+    torque = env.controller.get_joint_state().gripper_torque
+    if task_name == "pick_kettle":
+        success = torque > 0.5
+        msg = f"成功 (Torque {torque:.4f} > 0.5)" if success else f"失败 (Torque {torque:.4f} <= 0.5)"
+        color = "green" if success else "red"
+    elif task_name == "place_kettle":
+        success = torque < 0
+        msg = f"成功 (Torque {torque:.4f} < 0)" if success else f"失败 (Torque {torque:.4f} >= 0)"
+        color = "green" if success else "red"
+    elif task_name == "open_and_close":
+        success = True
+        msg = "成功 (流程完成)"
+        color = "green"
+    else:
+        return
+
+    cprint(f"[{task_name}] 结果判定: {msg}", color, attrs=["bold"])
 
 
 def main():
@@ -130,22 +163,41 @@ def main():
     pick_task = TaskConfig(
         name="pick_kettle",
         run_dir=RUN_ROOT.joinpath("x5-3d-idp3-pick_kettle-153_seed0"),
-        step_length=200,
-        # TODO: 更新为实际的关节+夹爪目标值
-        end_pose=[0, 0, 0, 0, 0, 0, 0.04],
+        step_length=300,
+        end_pose=[0, 0, 0, 0, 0, math.pi / 2, 0.08],
+        target_color=(100, 100, 0),
+        target_timestep=3.0,
     )
     place_task = TaskConfig(
         name="place_kettle",
         run_dir=RUN_ROOT.joinpath("x5-3d-idp3-place_kettle_seed0"),
-        step_length=200,
-        # TODO: 更新为实际的关节+夹爪目标值
-        end_pose=[0, 0, 0, 0, 0, 0, 0.04],
+        step_length=300,
+        end_pose=[0, 0, 0, 0, 0, 0, 0.08],
+        target_color=(100, 100, 0),
+        target_timestep=3.0,
+    )
+    open_task = TaskConfig(
+        name="open_lid",
+        run_dir=RUN_ROOT.joinpath("x5-3d-idp3-open-90_seed0"),
+        step_length=350,
+        end_pose=[],  # 中间过程不需要
+        target_color=(255, 0, 255),
+        target_timestep=3.0,
+    )
+    close_task = TaskConfig(
+        name="close_lid",
+        run_dir=RUN_ROOT.joinpath("x5-3d-idp3-close_seed0"),
+        step_length=350,
+        end_pose=[0, 0, 0, 0, 0, math.pi / 2, 0.08],
+        target_color=(255, 0, 255),
+        target_timestep=3.0,
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device_name = "cpu"
+    device = torch.device(device_name)
     print(f"Using device: {device}")
 
-    tasks = [pick_task, place_task]
+    tasks = [pick_task, place_task, open_task, close_task]
     loaded = [load_task(t, device) for t in tasks]
     if not loaded:
         raise RuntimeError("未加载到任何任务。")
@@ -170,7 +222,7 @@ def main():
     menu = (
         "1: pick_kettle\n"
         "2: place_kettle\n"
-        "r: reset 相机/状态\n"
+        "3: open_and_close\n"
         "q: 退出"
     )
     cprint("选择任务：\n" + menu, "yellow")
@@ -179,26 +231,50 @@ def main():
     first_init = True
     try:
         while True:
-            choice = input("请输入选项 (1/2/r/q): ").strip().lower()
+            choice = input("请输入选项 (1/2/3/q): ").strip().lower()
             if choice in {"q", "quit", "exit"}:
                 break
-            if choice == "r":
-                obs_dict = env.reset(first_init=False)
+            if choice not in {"1", "2", "3"}:
+                print("无效选项，请输入 1 / 2 / 3 / q")
+                continue
+
+            if choice == "3":
+                # 顺序执行 open 和 close
+                # --- Run Open ---
+                idx = 2
+                info = loaded[idx]
+                task = tasks[idx]
+                env.reconfigure(info["obs_horizon"], info["action_horizon"])
+                env.set_target_color(task.target_color)
+                obs_dict = env.reset(first_init=first_init)
                 first_init = False
-                continue
-            if choice not in {"1", "2"}:
-                print("无效选项，请输入 1 / 2 / r / q")
-                continue
+                obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+                
+                # --- Run Close ---
+                idx = 3
+                info = loaded[idx]
+                task = tasks[idx]
+                env.reconfigure(info["obs_horizon"], info["action_horizon"])
+                env.set_target_color(task.target_color)
+                # 关键：这里不能回零，所以 first_init 必须是 False。
+                # 另外，为了适应新策略的 horizon，必须调用 reset(first_init=False) 来刷新 buffer
+                obs_dict = env.reset(first_init=False)
+                obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+                
+                move_to_pose(env, task.end_pose, task.target_timestep, task.name)
+                check_task_success(env, "open_and_close")
+            else:
+                idx = 0 if choice == "1" else 1
+                info = loaded[idx]
+                task = tasks[idx]
 
-            idx = 0 if choice == "1" else 1
-            info = loaded[idx]
-            task = tasks[idx]
-
-            env.reconfigure(info["obs_horizon"], info["action_horizon"])
-            obs_dict = env.reset(first_init=first_init)
-            first_init = False
-            obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
-            move_to_pose(env, task.end_pose, task.name)
+                env.reconfigure(info["obs_horizon"], info["action_horizon"])
+                env.set_target_color(task.target_color)
+                obs_dict = env.reset(first_init=first_init)
+                first_init = False
+                obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+                move_to_pose(env, task.end_pose, task.target_timestep, task.name)
+                check_task_success(env, task.name)
     except KeyboardInterrupt:
         cprint("收到中断信号，正在停止并复位...", "red")
     finally:

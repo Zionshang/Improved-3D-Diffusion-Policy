@@ -189,8 +189,14 @@ class SingleVisionProcess(Process):
                     point_cloud_frame = grid_sample_pcd(point_cloud_frame, grid_size=self.grid_size)
                 if self.use_color_sampling:
                     # 颜色引导采样
+                    # Handle shared array for target_color
+                    if hasattr(self.target_color, 'get_obj'): # Check if it is a shared array
+                         current_target_color = tuple(self.target_color[:])
+                    else:
+                         current_target_color = self.target_color
+
                     point_cloud_frame = color_weighted_downsample(
-                        point_cloud_frame, self.num_points, target_color=self.target_color, temperature=self.color_temperature
+                        point_cloud_frame, self.num_points, target_color=current_target_color, temperature=self.color_temperature
                     )
                 if self.use_uniform_sampling:
                     point_cloud_frame = random_uniform_downsample(point_cloud_frame, self.num_points)
@@ -251,6 +257,11 @@ class L515Camera:
         self.device = self.devices[device_idx]
 
         self.queue = Queue(maxsize=3)
+        
+        # Create shared array for target_color
+        self.shared_target_color = multiprocessing.Array('i', 3)
+        self.shared_target_color[:] = target_color
+
         self.process = SingleVisionProcess(
             self.device,
             self.queue,
@@ -267,12 +278,15 @@ class L515Camera:
             resize_image=resize_image,
             use_color_sampling=use_color_sampling,
             use_uniform_sampling=use_uniform_sampling,
-            target_color=target_color,
+            target_color=self.shared_target_color,
             color_temperature=color_temperature,
         )
 
         self.process.start()
         print("L515 camera process started.")
+
+    def set_target_color(self, color):
+        self.shared_target_color[:] = color
 
     def __call__(self):
         color, depth, point_cloud = self.queue.get()
