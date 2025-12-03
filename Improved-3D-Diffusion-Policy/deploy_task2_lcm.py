@@ -17,10 +17,15 @@ from omegaconf import OmegaConf
 from termcolor import cprint
 import math
 import lcm
+import argparse
 
 from deploy_arx import ArxX5EnvInference
 from diffusion_policy_3d.workspace.base_workspace import BaseWorkspace
 from lcm_types.task_msgs import task_command_t, task_result_t
+
+import arx5_interface as arx5
+from peripherals.joystick import JoystickRobotics, XboxButton
+
 
 os.environ["WANDB_SILENT"] = "True"
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -132,11 +137,11 @@ def check_task_success(env: TaskEnv, task_name: str) -> bool:
     msg = ""
     color = "red"
 
-    if task_name == "pick_kettle":
+    if task_name == "pick_kettle_idp3":
         success = torque > 0.5
         msg = f"成功 (Torque {torque:.4f} > 0.5)" if success else f"失败 (Torque {torque:.4f} <= 0.5)"
         color = "green" if success else "red"
-    elif task_name == "place_kettle":
+    elif task_name == "place_kettle_idp3":
         success = torque < 0
         msg = f"成功 (Torque {torque:.4f} < 0)" if success else f"失败 (Torque {torque:.4f} >= 0)"
         color = "green" if success else "red"
@@ -163,37 +168,77 @@ class LCMHandler:
         print(f"Received task command: {self.task_id}")
 
 
+def run_manual_task(controller, joystick, name):
+    cprint(f"[{name}] Manual Control Mode. Press 'X' to finish task.", "yellow")
+    cmd_dt = 0.01
+    preview_time = 0.1
+    start_time = time.monotonic()
+    loop_cnt = 0
+    
+    while True:
+        joystick_pose, gripper_pos, control_button = joystick.get_control()
+        
+        if control_button == XboxButton.X:
+            cprint(f"[{name}] Task Completed (X pressed).", "green")
+            return True
+            
+        current_timestamp = controller.get_timestamp()
+        eef_cmd = arx5.EEFState()
+        eef_cmd.pose_6d()[:] = joystick_pose
+        eef_cmd.gripper_pos = gripper_pos
+        eef_cmd.timestamp = current_timestamp + preview_time
+        controller.set_eef_cmd(eef_cmd)
+        
+        loop_cnt += 1
+        target_time = start_time + loop_cnt * cmd_dt
+        sleep_time = target_time - time.monotonic()
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--t1_auto", type=int, default=1, help="Task 1 (Pick) is auto (1) or manual (0)")
+    parser.add_argument("--t2_auto", type=int, default=1, help="Task 2 (Place) is auto (1) or manual (0)")
+    parser.add_argument("--t3_auto", type=int, default=1, help="Task 3 (Open/Close) is auto (1) or manual (0)")
+    args = parser.parse_args()
+
+    task_modes = {
+        1: bool(args.t1_auto),
+        2: bool(args.t2_auto),
+        3: bool(args.t3_auto)
+    }
+
     # 固定配置：如需调整路径/步长/结束姿态，请直接改这里
     ROOT = pathlib.Path(__file__).resolve().parent
     RUN_ROOT = ROOT.joinpath("data", "outputs")
 
-    pick_task = TaskConfig(
-        name="pick_kettle",
+    pick_idp3_task = TaskConfig(
+        name="pick_kettle_idp3",
         run_dir=RUN_ROOT.joinpath("x5-3d-idp3-pick_kettle-153_seed0"),
         step_length=300,
         end_pose=[0, 0, 0, 0, 0, math.pi / 2, 0.08],
         target_color=(100, 100, 0),
         target_timestep=3.0,
     )
-    place_task = TaskConfig(
-        name="place_kettle",
+    place_idp3_task = TaskConfig(
+        name="place_kettle_idp3",
         run_dir=RUN_ROOT.joinpath("x5-3d-idp3-place_kettle_seed0"),
         step_length=300,
         end_pose=[0, 0, 0, 0, 0, 0, 0.08],
         target_color=(100, 100, 0),
         target_timestep=3.0,
     )
-    open_task = TaskConfig(
-        name="open_lid",
+    open_idp3_task = TaskConfig(
+        name="open_lid_idp3",
         run_dir=RUN_ROOT.joinpath("x5-3d-idp3-open-90_seed0"),
         step_length=350,
         end_pose=[],  # 中间过程不需要
         target_color=(255, 0, 255),
         target_timestep=3.0,
     )
-    close_task = TaskConfig(
-        name="close_lid",
+    close_idp3_task = TaskConfig(
+        name="close_lid_idp3",
         run_dir=RUN_ROOT.joinpath("x5-3d-idp3-close_seed0"),
         step_length=350,
         end_pose=[0, 0, 0, 0, 0, math.pi / 2, 0.08],
@@ -205,27 +250,24 @@ def main():
     device = torch.device(device_name)
     print(f"Using device: {device}")
 
-    tasks = [pick_task, place_task, open_task, close_task]
-    loaded = [load_task(t, device) for t in tasks]
-    if not loaded:
-        raise RuntimeError("未加载到任何任务。")
+    tasks = [pick_idp3_task, place_idp3_task, open_idp3_task, close_idp3_task]
+    loaded = []
+    
+    if any(task_modes.values()):
+        loaded = [load_task(t, device) for t in tasks]
+        if not loaded:
+            raise RuntimeError("未加载到任何任务。")
 
-    first_use_pc = loaded[0]["use_point_cloud"]
-    first_use_img = loaded[0]["use_image"]
-    for ld in loaded[1:]:
-        if (ld["use_point_cloud"] != first_use_pc) or (ld["use_image"] != first_use_img):
-            raise ValueError("两个任务的观测类型不一致（必须都用点云或都用图像）。")
+        first_use_pc = loaded[0]["use_point_cloud"]
+        first_use_img = loaded[0]["use_image"]
+        for ld in loaded[1:]:
+            if (ld["use_point_cloud"] != first_use_pc) or (ld["use_image"] != first_use_img):
+                raise ValueError("两个任务的观测类型不一致（必须都用点云或都用图像）。")
 
-    env = TaskEnv(
-        obs_horizon=loaded[0]["obs_horizon"],
-        action_horizon=loaded[0]["action_horizon"],
-        device="gpu" if device.type == "cuda" else "cpu",
-        use_point_cloud=first_use_pc,
-        use_image=first_use_img,
-        model="X5",
-        interface="can0",
-        visualize_point_cloud=True,
-    )
+    # State variables
+    env = None
+    manual_controller = None
+    joystick = None
 
     # LCM Setup
     lc = lcm.LCM()
@@ -247,48 +289,118 @@ def main():
                 
                 success = False
                 
-                if task_id == 3:
-                    # 顺序执行 open 和 close
-                    # --- Run Open ---
-                    idx = 2
-                    info = loaded[idx]
-                    task = tasks[idx]
-                    env.reconfigure(info["obs_horizon"], info["action_horizon"])
-                    env.set_target_color(task.target_color)
-                    obs_dict = env.reset(first_init=first_init)
-                    first_init = False
-                    obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
-                    
-                    # --- Run Close ---
-                    idx = 3
-                    info = loaded[idx]
-                    task = tasks[idx]
-                    env.reconfigure(info["obs_horizon"], info["action_horizon"])
-                    env.set_target_color(task.target_color)
-                    # 关键：这里不能回零，所以 first_init 必须是 False。
-                    # 另外，为了适应新策略的 horizon，必须调用 reset(first_init=False) 来刷新 buffer
-                    obs_dict = env.reset(first_init=False)
-                    obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
-                    
-                    move_to_pose(env, task.end_pose, task.target_timestep, task.name)
-                    success = check_task_success(env, "open_and_close")
-                
-                elif task_id in [1, 2]:
-                    idx = 0 if task_id == 1 else 1
-                    info = loaded[idx]
-                    task = tasks[idx]
-
-                    env.reconfigure(info["obs_horizon"], info["action_horizon"])
-                    env.set_target_color(task.target_color)
-                    obs_dict = env.reset(first_init=first_init)
-                    first_init = False
-                    obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
-                    move_to_pose(env, task.end_pose, task.target_timestep, task.name)
-                    success = check_task_success(env, task.name)
-                
-                else:
-                    print(f"Unknown task ID: {task_id}")
+                # Determine mode for this task
+                if task_id is None:
+                    print("Received None task_id")
                     success = False
+                    is_auto = False
+                else:
+                    is_auto = task_modes.get(task_id, False)
+                
+                if is_auto:
+                    # Ensure Auto Environment
+                    if manual_controller is not None:
+                        cprint("Switching to Auto: Releasing Manual Controller...", "yellow")
+                        manual_controller.reset_to_home()
+                        del manual_controller
+                        manual_controller = None
+                    
+                    if env is None:
+                        cprint("Switching to Auto: Initializing TaskEnv...", "yellow")
+                        if not loaded:
+                             raise RuntimeError("Auto task requested but no models loaded!")
+                        
+                        first_use_pc = loaded[0]["use_point_cloud"]
+                        first_use_img = loaded[0]["use_image"]
+                        env = TaskEnv(
+                            obs_horizon=loaded[0]["obs_horizon"],
+                            action_horizon=loaded[0]["action_horizon"],
+                            device="gpu" if device.type == "cuda" else "cpu",
+                            use_point_cloud=first_use_pc,
+                            use_image=first_use_img,
+                            model="X5",
+                            interface="can0",
+                            visualize_point_cloud=True,
+                        )
+
+                    if task_id == 3:
+                        # 顺序执行 open 和 close
+                        # --- Run Open ---
+                        idx = 2
+                        info = loaded[idx]
+                        task = tasks[idx]
+                        env.reconfigure(info["obs_horizon"], info["action_horizon"])
+                        env.set_target_color(task.target_color)
+                        obs_dict = env.reset(first_init=first_init)
+                        first_init = False
+                        obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+                        
+                        # --- Run Close ---
+                        idx = 3
+                        info = loaded[idx]
+                        task = tasks[idx]
+                        env.reconfigure(info["obs_horizon"], info["action_horizon"])
+                        env.set_target_color(task.target_color)
+                        # 关键：这里不能回零，所以 first_init 必须是 False。
+                        # 另外，为了适应新策略的 horizon，必须调用 reset(first_init=False) 来刷新 buffer
+                        obs_dict = env.reset(first_init=False)
+                        obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+                        
+                        move_to_pose(env, task.end_pose, task.target_timestep, task.name)
+                        success = check_task_success(env, "open_and_close")
+                    
+                    elif task_id in [1, 2]:
+                        idx = 0 if task_id == 1 else 1
+                        info = loaded[idx]
+                        task = tasks[idx]
+
+                        env.reconfigure(info["obs_horizon"], info["action_horizon"])
+                        env.set_target_color(task.target_color)
+                        obs_dict = env.reset(first_init=first_init)
+                        first_init = False
+                        obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+                        move_to_pose(env, task.end_pose, task.target_timestep, task.name)
+                        success = check_task_success(env, task.name)
+                    
+                    else:
+                        print(f"Unknown task ID: {task_id}")
+                        success = False
+                else:
+                    # Ensure Manual Environment
+                    if env is not None:
+                        cprint("Switching to Manual: Releasing TaskEnv...", "yellow")
+                        env.controller.reset_to_home()
+                        viewer = getattr(env, "_pcd_viewer", None)
+                        if viewer is not None:
+                            viewer.close()
+                        del env
+                        env = None
+                    
+                    if manual_controller is None:
+                        cprint("Switching to Manual: Initializing Controller...", "yellow")
+                        manual_controller = arx5.Arx5CartesianController("X5", "can0")
+                        manual_controller.reset_to_home()
+                        manual_controller.set_log_level(arx5.LogLevel.DEBUG)
+                        
+                    if joystick is None:
+                        cprint("Initializing Joystick...", "yellow")
+                        robot_config = manual_controller.get_robot_config()
+                        joystick = JoystickRobotics(
+                            home_position=manual_controller.get_home_pose().tolist()[:3],
+                            ee_limit=[[0.0, -0.5, -0.5, -1.8, -1.6, -1.6], [0.7, 0.5, 0.5, 1.8, 1.6, 1.6]],
+                            gripper_limit=[0.0, robot_config.gripper_width],
+                        )
+                    
+                    # Manual logic
+                    if task_id == 3:
+                        success = run_manual_task(manual_controller, joystick, "open_and_close")
+                    elif task_id == 1:
+                        success = run_manual_task(manual_controller, joystick, "pick_kettle_idp3")
+                    elif task_id == 2:
+                        success = run_manual_task(manual_controller, joystick, "place_kettle_idp3")
+                    else:
+                        print(f"Unknown task ID: {task_id}")
+                        success = False
 
                 # Send result via LCM
                 result_msg = task_result_t()
@@ -299,10 +411,18 @@ def main():
     except KeyboardInterrupt:
         cprint("收到中断信号，正在停止并复位...", "red")
     finally:
-        env.controller.reset_to_home()
-        viewer = getattr(env, "_pcd_viewer", None)
-        if viewer is not None:
-            viewer.close()
+        if env is not None:
+            env.controller.reset_to_home()
+            viewer = getattr(env, "_pcd_viewer", None)
+            if viewer is not None:
+                viewer.close()
+        
+        if manual_controller is not None:
+            try:
+                manual_controller.reset_to_home()
+                manual_controller.set_to_damping()
+            except:
+                pass
 
 
 if __name__ == "__main__":
