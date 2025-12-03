@@ -16,9 +16,11 @@ import torch
 from omegaconf import OmegaConf
 from termcolor import cprint
 import math
+import lcm
 
 from deploy_arx import ArxX5EnvInference
 from diffusion_policy_3d.workspace.base_workspace import BaseWorkspace
+from lcm_types.task_msgs import task_command_t, task_result_t
 
 os.environ["WANDB_SILENT"] = "True"
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -110,7 +112,7 @@ def run_task(env: TaskEnv, policy: torch.nn.Module, step_len: int, obs_dict: Dic
             action_list = [act.detach().cpu().numpy() for act in action]
         obs_dict = env.step(action_list)
         step_count += len(action_list)
-        
+
     return obs_dict
 
 
@@ -124,16 +126,12 @@ def move_to_pose(env: TaskEnv, target: List[float], duration: float, name: str):
     env.controller.set_joint_cmd(js_cmd)
     print(f"[{name}] 已发送结束位姿。正在等待移动完成...")
 
-    # # 阻塞并打印 torque，直到动作大致完成
-    # start_time = time.time()
-    # while time.time() - start_time < duration:
-    #     current_torque = env.controller.get_joint_state().gripper_torque
-    #     print(f"[{name}] moving... gripper_torque: {current_torque:.4f}")
-    #     time.sleep(0.1)  # 10Hz 打印频率
-
-
-def check_task_success(env: TaskEnv, task_name: str):
+def check_task_success(env: TaskEnv, task_name: str) -> bool:
     torque = env.controller.get_joint_state().gripper_torque
+    success = False
+    msg = ""
+    color = "red"
+
     if task_name == "pick_kettle":
         success = torque > 0.5
         msg = f"成功 (Torque {torque:.4f} > 0.5)" if success else f"失败 (Torque {torque:.4f} <= 0.5)"
@@ -147,9 +145,22 @@ def check_task_success(env: TaskEnv, task_name: str):
         msg = "成功 (流程完成)"
         color = "green"
     else:
-        return
+        return False
 
     cprint(f"[{task_name}] 结果判定: {msg}", color, attrs=["bold"])
+    return success
+
+
+class LCMHandler:
+    def __init__(self):
+        self.task_id = None
+        self.new_command = False
+
+    def handle_command(self, channel, data):
+        msg = task_command_t.decode(data)
+        self.task_id = msg.task_id
+        self.new_command = True
+        print(f"Received task command: {self.task_id}")
 
 
 def main():
@@ -216,62 +227,75 @@ def main():
         visualize_point_cloud=True,
     )
 
-    menu = (
-        "1: pick_kettle\n"
-        "2: place_kettle\n"
-        "3: open_and_close\n"
-        "q: 退出"
-    )
-    cprint("选择任务：\n" + menu, "yellow")
+    # LCM Setup
+    lc = lcm.LCM()
+    handler = LCMHandler()
+    lc.subscribe("TASK_COMMAND", handler.handle_command)
+    
+    cprint("Waiting for LCM commands...", "yellow")
 
     obs_dict = None
     first_init = True
     try:
         while True:
-            choice = input("请输入选项 (1/2/3/q): ").strip().lower()
-            if choice in {"q", "quit", "exit"}:
-                break
-            if choice not in {"1", "2", "3"}:
-                print("无效选项，请输入 1 / 2 / 3 / q")
-                continue
+            # Non-blocking check for LCM messages
+            lc.handle_timeout(10) # 10ms timeout
 
-            if choice == "3":
-                # 顺序执行 open 和 close
-                # --- Run Open ---
-                idx = 2
-                info = loaded[idx]
-                task = tasks[idx]
-                env.reconfigure(info["obs_horizon"], info["action_horizon"])
-                env.set_target_color(task.target_color)
-                obs_dict = env.reset(first_init=first_init)
-                first_init = False
-                obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+            if handler.new_command:
+                task_id = handler.task_id
+                handler.new_command = False # Reset flag
                 
-                # --- Run Close ---
-                idx = 3
-                info = loaded[idx]
-                task = tasks[idx]
-                env.reconfigure(info["obs_horizon"], info["action_horizon"])
-                env.set_target_color(task.target_color)
-                # 关键：这里不能回零，所以 first_init 必须是 False。
-                # 另外，为了适应新策略的 horizon，必须调用 reset(first_init=False) 来刷新 buffer
-                obs_dict = env.reset(first_init=False)
-                obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+                success = False
                 
-                move_to_pose(env, task.end_pose, task.target_timestep, task.name)
-                check_task_success(env, "open_and_close")
-            else:
-                idx = 0 if choice == "1" else 1
-                info = loaded[idx]
-                task = tasks[idx]
+                if task_id == 3:
+                    # 顺序执行 open 和 close
+                    # --- Run Open ---
+                    idx = 2
+                    info = loaded[idx]
+                    task = tasks[idx]
+                    env.reconfigure(info["obs_horizon"], info["action_horizon"])
+                    env.set_target_color(task.target_color)
+                    obs_dict = env.reset(first_init=first_init)
+                    first_init = False
+                    obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+                    
+                    # --- Run Close ---
+                    idx = 3
+                    info = loaded[idx]
+                    task = tasks[idx]
+                    env.reconfigure(info["obs_horizon"], info["action_horizon"])
+                    env.set_target_color(task.target_color)
+                    # 关键：这里不能回零，所以 first_init 必须是 False。
+                    # 另外，为了适应新策略的 horizon，必须调用 reset(first_init=False) 来刷新 buffer
+                    obs_dict = env.reset(first_init=False)
+                    obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+                    
+                    move_to_pose(env, task.end_pose, task.target_timestep, task.name)
+                    success = check_task_success(env, "open_and_close")
+                
+                elif task_id in [1, 2]:
+                    idx = 0 if task_id == 1 else 1
+                    info = loaded[idx]
+                    task = tasks[idx]
 
-                env.reconfigure(info["obs_horizon"], info["action_horizon"])
-                env.set_target_color(task.target_color)
-                obs_dict = env.reset(first_init=first_init)
-                first_init = False
-                obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
-                move_to_pose(env, task.end_pose, task.target_timestep, task.name)
-                check_task_success(env, task.name)
+                    env.reconfigure(info["obs_horizon"], info["action_horizon"])
+                    env.set_target_color(task.target_color)
+                    obs_dict = env.reset(first_init=first_init)
+                    first_init = False
+                    obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+                    move_to_pose(env, task.end_pose, task.target_timestep, task.name)
+                    success = check_task_success(env, task.name)
+                
+                else:
+                    print(f"Unknown task ID: {task_id}")
+                    success = False
+
+                # Send result via LCM
+                result_msg = task_result_t()
+                result_msg.success = 1 if success else 0
+                lc.publish("TASK_RESULT", result_msg.encode())
+                print(f"Sent task result: {result_msg.success}")
+
     except KeyboardInterrupt:
         cprint("收到中断信号，正在停止并复位...", "red")
     finally:
