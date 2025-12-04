@@ -19,4 +19,4 @@ echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 echo "AMENT_PREFIX_PATH=$AMENT_PREFIX_PATH"
 
 cd "$IDP_DIR"
-python deploy_task2_lcm.py
+python deploy_task2_lcm.py "$@"

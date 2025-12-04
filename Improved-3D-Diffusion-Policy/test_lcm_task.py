@@ -44,6 +44,7 @@ def main():
         print("1: pick_kettle")
         print("2: place_kettle")
         print("3: open_and_close")
+        print("4: watering_flowers")
         print("q: Quit")
         
         choice = input("Enter task ID: ").strip().lower()
@@ -51,7 +52,7 @@ def main():
         if choice in ['q', 'quit', 'exit']:
             break
             
-        if choice not in ['1', '2', '3']:
+        if choice not in ['1', '2', '3', '4']:
             print("Invalid choice")
             continue
             
