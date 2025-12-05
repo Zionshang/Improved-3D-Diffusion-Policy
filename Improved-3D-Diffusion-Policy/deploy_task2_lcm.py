@@ -222,10 +222,10 @@ def run_replay_task(controller, traj_path, name):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--t1_auto", type=int, default=1, help="Task 1 (Pick) is auto (1) or manual (0)")
-    parser.add_argument("--t2_auto", type=int, default=1, help="Task 2 (Place) is auto (1) or manual (0)")
-    parser.add_argument("--t3_auto", type=int, default=1, help="Task 3 (Open/Close) is auto (1) or manual (0)")
-    parser.add_argument("--t4_auto", type=int, default=1, help="Task 4 (Watering) is auto (1) or manual (0)")
+    parser.add_argument("--t1_auto", type=int, default=1, help="Task 1 (Pick Kettle) is auto (1) or manual (0)")
+    parser.add_argument("--t2_auto", type=int, default=1, help="Task 2 (Open/Close) is auto (1) or manual (0)")
+    parser.add_argument("--t3_auto", type=int, default=1, help="Task 3 (Watering) is auto (1) or manual (0)")
+    parser.add_argument("--t4_auto", type=int, default=1, help="Task 4 (Place Kettle) is auto (1) or manual (0)")
     args = parser.parse_args()
 
     task_modes = {
@@ -325,8 +325,8 @@ def main():
                     is_auto = task_modes.get(task_id, False)
                 
                 if is_auto:
-                    if task_id == 4:
-                        # Task 4 Special Handling (Replay)
+                    if task_id == 3:
+                        # Task 3: Watering (Replay)
                         controller = None
                         if env is not None:
                             controller = env.controller
@@ -368,8 +368,22 @@ def main():
                                 visualize_point_cloud=False,
                             )
 
-                        if task_id == 3:
-                            # 顺序执行 open 和 close
+                        if task_id == 1:
+                            # Task 1: Pick Kettle
+                            idx = 0
+                            info = loaded[idx]
+                            task = tasks[idx]
+
+                            env.reconfigure(info["obs_horizon"], info["action_horizon"])
+                            env.set_target_color(task.target_color)
+                            obs_dict = env.reset(first_init=first_init)
+                            first_init = False
+                            obs_dict = run_task(env, info["policy"], task.step_length, obs_dict, task.name)
+                            move_to_pose(env, task.end_pose, task.target_timestep, task.name)
+                            success = check_task_success(env, task.name)
+                        
+                        elif task_id == 2:
+                            # Task 2: Open and Close
                             # --- Run Open ---
                             idx = 2
                             info = loaded[idx]
@@ -394,8 +408,9 @@ def main():
                             move_to_pose(env, task.end_pose, task.target_timestep, task.name)
                             success = check_task_success(env, "open_and_close")
                         
-                        elif task_id in [1, 2]:
-                            idx = 0 if task_id == 1 else 1
+                        elif task_id == 4:
+                            # Task 4: Place Kettle
+                            idx = 1
                             info = loaded[idx]
                             task = tasks[idx]
 
@@ -437,14 +452,14 @@ def main():
                         )
                     
                     # Manual logic
-                    if task_id == 3:
-                        success = run_manual_task(manual_controller, joystick, "open_and_close")
-                    elif task_id == 1:
+                    if task_id == 1:
                         success = run_manual_task(manual_controller, joystick, "pick_kettle_idp3")
                     elif task_id == 2:
-                        success = run_manual_task(manual_controller, joystick, "place_kettle_idp3")
-                    elif task_id == 4:
+                        success = run_manual_task(manual_controller, joystick, "open_and_close")
+                    elif task_id == 3:
                         success = run_manual_task(manual_controller, joystick, "watering_flowers")
+                    elif task_id == 4:
+                        success = run_manual_task(manual_controller, joystick, "place_kettle_idp3")
                     else:
                         print(f"Unknown task ID: {task_id}")
                         success = False

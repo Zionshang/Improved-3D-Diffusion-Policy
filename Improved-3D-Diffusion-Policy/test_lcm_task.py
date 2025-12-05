@@ -38,9 +38,9 @@ def main():
     while True:
         print("\nAvailable tasks:")
         print("1: pick_kettle")
-        print("2: place_kettle")
-        print("3: open_and_close")
-        print("4: watering_flowers")
+        print("2: open_and_close")
+        print("3: watering_flowers")
+        print("4: place_kettle")
         print("q: Quit")
         
         choice = input("Enter task ID: ").strip().lower()
