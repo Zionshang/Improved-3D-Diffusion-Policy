@@ -10,6 +10,16 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 from datetime import datetime
+import multiprocessing
+
+# 必须在导入 torch 和其他 CUDA 库之前设置
+# 使用 'forkserver' 或 'spawn' 避免 fork 后 CUDA 死锁
+try:
+    multiprocessing.set_start_method('forkserver')
+    print("Using 'forkserver' multiprocessing method")
+except RuntimeError:
+    # 如果已经设置过，则跳过
+    print(f"Multiprocessing start method already set to: {multiprocessing.get_start_method()}")
 
 import hydra
 import torch
@@ -113,7 +123,7 @@ def run_task(env: TaskEnv, policy: torch.nn.Module, step_len: int, obs_dict: Dic
             t_start = time.time()
             action = policy(obs_dict)[0]
             t_end = time.time()
-            print(f"[{name}] inference time: {(t_end - t_start) * 1000.0:.2f} ms")
+            print(f"[{name}] Step {step_count}/{step_len}, inference time: {(t_end - t_start) * 1000.0:.2f} ms")
             action_list = [act.detach().cpu().numpy() for act in action]
         obs_dict = env.step(action_list)
         step_count += len(action_list)
@@ -170,7 +180,7 @@ class LCMHandler:
 
 
 def run_manual_task(controller, joystick, name):
-    cprint(f"[{name}] Manual Control Mode. Press 'X' to finish task.", "yellow")
+    cprint(f"[{name}] Manual Control Mode. Press 'X' to finish task, 'B' to fail.", "yellow")
     cmd_dt = 0.01
     preview_time = 0.1
     start_time = time.monotonic()
@@ -182,6 +192,10 @@ def run_manual_task(controller, joystick, name):
         if control_button == XboxButton.X:
             cprint(f"[{name}] Task Completed (X pressed).", "green")
             return True
+        
+        if control_button == XboxButton.B:
+            cprint(f"[{name}] Task Failed (B pressed).", "red")
+            return False
             
         current_timestamp = controller.get_timestamp()
         eef_cmd = arx5.EEFState()
@@ -299,12 +313,14 @@ def main():
     # LCM Setup with UDP multicast
     lc = lcm.LCM("udpm://239.255.50.50:10010?ttl=1")
     handler = LCMHandler()
-    lc.subscribe("TASK_COMMAND", handler.handle_command)
+    # 监听 ARM_CMD 通道（与 task2_decision.py 发送的通道一致）
+    lc.subscribe("ARM_CMD", handler.handle_command)
     
-    cprint("Waiting for LCM commands on udpm://239.255.50.50:10010...", "yellow")
+    cprint("Waiting for LCM commands on udpm://239.255.50.50:10010, channel: ARM_CMD...", "yellow")
 
     obs_dict = None
     first_init = True
+    task2_first_execution = True  # 追踪任务2是否第一次执行
     try:
         while True:
             # Non-blocking check for LCM messages
@@ -322,7 +338,16 @@ def main():
                     success = False
                     is_auto = False
                 else:
-                    is_auto = task_modes.get(task_id, False)
+                    # 任务2特殊处理：只有第一次执行时使用配置的模式，之后都是手动
+                    if task_id == 2:
+                        is_auto = task_modes.get(task_id, False) and task2_first_execution
+                        if task2_first_execution and task_modes.get(task_id, False):
+                            cprint("[Task 2] First execution - using AUTO mode", "cyan")
+                            task2_first_execution = False
+                        elif not task2_first_execution:
+                            cprint("[Task 2] Subsequent execution - forcing MANUAL mode", "cyan")
+                    else:
+                        is_auto = task_modes.get(task_id, False)
                 
                 if is_auto:
                     if task_id == 3:
@@ -464,12 +489,15 @@ def main():
                         print(f"Unknown task ID: {task_id}")
                         success = False
 
-                # Send result via LCM (直接发送int)
+                # Send result via LCM (ARM_STATUS格式：两个int32，status和obj_id)
                 import struct
-                result_value = 1 if success else 0
-                result_bytes = struct.pack('<i', result_value)
-                lc.publish("TASK_RESULT", result_bytes)
-                print(f"Sent task result: {result_value}")
+                # status: 0=成功, 1=失败（与ARM_STATUS协议一致）
+                status = 0 if success else 1
+                obj_id = task_id if task_id is not None else 0
+                # 打包为两个int32（小端序）
+                result_bytes = struct.pack('<ii', status, obj_id)
+                lc.publish("ARM_STATUS", result_bytes)
+                print(f"Sent ARM_STATUS: status={status}, obj_id={obj_id}")
 
     except KeyboardInterrupt:
         cprint("收到中断信号，正在停止并复位...", "red")

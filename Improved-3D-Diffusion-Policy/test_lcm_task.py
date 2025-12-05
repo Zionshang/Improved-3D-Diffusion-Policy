@@ -5,22 +5,24 @@ import struct
 class TaskTester:
     def __init__(self):
         self.lc = lcm.LCM("udpm://239.255.50.50:10010?ttl=1")
-        self.lc.subscribe("TASK_RESULT", self.handle_result)
+        self.lc.subscribe("ARM_STATUS", self.handle_result)
         self.result_received = False
-        self.last_success = 0
+        self.last_status = 0
+        self.last_obj_id = 0
 
     def handle_result(self, channel, data):
-        # 直接解码为int (小端序, 4字节)
-        result = struct.unpack('<i', data)[0]
-        print(f"Received result: success={result}")
-        self.last_success = result
+        # 解码两个int32 (小端序, 8字节): status和obj_id
+        status, obj_id = struct.unpack('<ii', data)
+        print(f"Received ARM_STATUS: status={status} ({'Success' if status == 0 else 'Failed'}), obj_id={obj_id}")
+        self.last_status = status
+        self.last_obj_id = obj_id
         self.result_received = True
 
     def send_task(self, task_id):
-        # 直接编码int为字节流
+        # 直接编码int为字节流，发送到ARM_CMD通道
         data = struct.pack('<i', task_id)
-        self.lc.publish("TASK_COMMAND", data)
-        print(f"Sent task command: {task_id}")
+        self.lc.publish("ARM_CMD", data)
+        print(f"Sent ARM_CMD: task_id={task_id}")
         self.result_received = False
 
     def wait_for_result(self, timeout=60):
@@ -57,7 +59,8 @@ def main():
         
         print("Waiting for task completion...")
         if tester.wait_for_result(timeout=120): # 2 minutes timeout
-            print(f"Task completed. Success: {tester.last_success}")
+            success_str = "SUCCESS" if tester.last_status == 0 else "FAILED"
+            print(f"Task completed. Status: {success_str} (status={tester.last_status}, obj_id={tester.last_obj_id})")
         else:
             print("Task timed out or no response received")
 

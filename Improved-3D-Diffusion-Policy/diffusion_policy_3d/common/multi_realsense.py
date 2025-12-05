@@ -7,7 +7,8 @@ import time
 import multiprocessing
 from diffusion_policy_3d.common.pcd_downsampling import grid_sample_pcd, color_weighted_downsample, random_uniform_downsample
 
-multiprocessing.set_start_method("fork")
+# 不在这里设置 start_method，让主程序在导入任何 CUDA 库之前设置
+# multiprocessing.set_start_method("fork")
 
 np.printoptions(3, suppress=True)
 

@@ -170,6 +170,7 @@ class ArxX5EnvInference:
         if self.use_image:
             self.color_buf.append(cam_dict.get("color"))
             self.depth_buf.append(cam_dict.get("depth"))
+        print("Camera ready!")
 
         # 读取一次关节状态
         js_current = self.controller.get_joint_state()
