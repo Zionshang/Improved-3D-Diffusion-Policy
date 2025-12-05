@@ -273,7 +273,7 @@ def main():
         target_timestep=3.0,
     )
 
-    device_name = "cpu"
+    device_name = "cuda"
     device = torch.device(device_name)
     print(f"Using device: {device}")
 
@@ -365,7 +365,7 @@ def main():
                                 use_image=first_use_img,
                                 model="X5",
                                 interface="can0",
-                                visualize_point_cloud=True,
+                                visualize_point_cloud=False,
                             )
 
                         if task_id == 3:
