@@ -22,7 +22,6 @@ import argparse
 
 from deploy_arx import ArxX5EnvInference
 from diffusion_policy_3d.workspace.base_workspace import BaseWorkspace
-from lcm_types.task_msgs import task_command_t, task_result_t
 
 import arx5_interface as arx5
 from peripherals.joystick import JoystickRobotics, XboxButton
@@ -163,8 +162,9 @@ class LCMHandler:
         self.new_command = False
 
     def handle_command(self, channel, data):
-        msg = task_command_t.decode(data)
-        self.task_id = msg.task_id
+        # 直接解码为int (小端序, 4字节)
+        import struct
+        self.task_id = struct.unpack('<i', data)[0]
         self.new_command = True
         print(f"Received task command: {self.task_id}")
 
@@ -296,12 +296,12 @@ def main():
     manual_controller = None
     joystick = None
 
-    # LCM Setup
-    lc = lcm.LCM()
+    # LCM Setup with UDP multicast
+    lc = lcm.LCM("udpm://239.255.50.50:10010?ttl=1")
     handler = LCMHandler()
     lc.subscribe("TASK_COMMAND", handler.handle_command)
     
-    cprint("Waiting for LCM commands...", "yellow")
+    cprint("Waiting for LCM commands on udpm://239.255.50.50:10010...", "yellow")
 
     obs_dict = None
     first_init = True
@@ -449,11 +449,12 @@ def main():
                         print(f"Unknown task ID: {task_id}")
                         success = False
 
-                # Send result via LCM
-                result_msg = task_result_t()
-                result_msg.success = 1 if success else 0
-                lc.publish("TASK_RESULT", result_msg.encode())
-                print(f"Sent task result: {result_msg.success}")
+                # Send result via LCM (直接发送int)
+                import struct
+                result_value = 1 if success else 0
+                result_bytes = struct.pack('<i', result_value)
+                lc.publish("TASK_RESULT", result_bytes)
+                print(f"Sent task result: {result_value}")
 
     except KeyboardInterrupt:
         cprint("收到中断信号，正在停止并复位...", "red")

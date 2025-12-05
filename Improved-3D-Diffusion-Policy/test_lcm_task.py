@@ -1,29 +1,25 @@
 import lcm
 import time
-import sys
-import os
-
-# Add current directory to path to import lcm_types
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from lcm_types.task_msgs import task_command_t, task_result_t
+import struct
 
 class TaskTester:
     def __init__(self):
-        self.lc = lcm.LCM()
+        self.lc = lcm.LCM("udpm://239.255.50.50:10010?ttl=1")
         self.lc.subscribe("TASK_RESULT", self.handle_result)
         self.result_received = False
         self.last_success = 0
 
     def handle_result(self, channel, data):
-        msg = task_result_t.decode(data)
-        print(f"Received result: success={msg.success}")
-        self.last_success = msg.success
+        # 直接解码为int (小端序, 4字节)
+        result = struct.unpack('<i', data)[0]
+        print(f"Received result: success={result}")
+        self.last_success = result
         self.result_received = True
 
     def send_task(self, task_id):
-        msg = task_command_t()
-        msg.task_id = task_id
-        self.lc.publish("TASK_COMMAND", msg.encode())
+        # 直接编码int为字节流
+        data = struct.pack('<i', task_id)
+        self.lc.publish("TASK_COMMAND", data)
         print(f"Sent task command: {task_id}")
         self.result_received = False
 
